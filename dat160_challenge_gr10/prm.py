@@ -1,0 +1,1 @@
+#skal inneholde selve PRM logikken. lager kartet over mulige trygge veier

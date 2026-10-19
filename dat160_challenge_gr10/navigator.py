@@ -1,0 +1,1 @@
+#selve hjernen, finner hvor roboten er og hvor den skal, bruker ruteplanlegger til å til å sende hastighets kommandoer
