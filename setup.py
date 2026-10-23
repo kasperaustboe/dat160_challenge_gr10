@@ -20,6 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'leader = dat160_challenge_gr10.leader:main',
         ],
     },
 )
