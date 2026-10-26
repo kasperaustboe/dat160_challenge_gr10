@@ -21,7 +21,7 @@ class ExplorationManager:
         
         self.cols = int(map_width / resolution)
         self.rows = int(map_height / resolution)
-        self.visit_grid = np.zeros((self.rows, self.cols), dtype=int)git
+        self.visit_grid = np.zeros((self.rows, self.cols), dtype=int)
 
     def _pos_to_grid(self, x, y):
         adj_x = x - self.origin_x
