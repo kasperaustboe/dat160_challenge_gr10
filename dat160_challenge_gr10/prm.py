@@ -4,6 +4,7 @@ from collections import defaultdict
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt
+from scipy.stats import qmc
 
 
 class PRM:
@@ -212,53 +213,34 @@ class PRM:
         self.edges = {}
         self.cell_nodes = {}
 
-        rng = random.Random(self.seed)
+        size = max(1, math.ceil(self.cell_size / self.resolution))
 
-        size = max(
-            1,
-            math.ceil(self.cell_size / self.resolution)
-        )
+        engine = qmc.PoissonDisk(d=2, radius=0.25, seed=self.seed)
 
-        for y0 in range(0, self.height, size):
-            for x0 in range(0, self.width, size):
+        unit_points = engine.fill_space()
 
-                region = self.free[
-                    y0:min(y0 + size, self.height),
-                    x0:min(x0 + size, self.width)
-                ]
+        for pt in unit_points:
+            x = int(pt[0] * self.width)
+            y = int(pt[1] * self.height)
 
-                available = np.argwhere(region)
+            x = min(max(x, 0), self.width - 1)
+            y = min(max(y, 0), self.height - 1)
 
-                if len(available) == 0:
-                    continue
+            if not self.free[y, x]:
+                continue
 
-                cell = (x0 // size, y0 // size)
+            cell = (x // size, y // size)
+
+            if cell not in self.cell_nodes:
                 self.cell_nodes[cell] = []
 
-                count = min(
-                    self.points_per_cell,
-                    len(available)
-                )
+            if len(self.cell_nodes[cell]) >= self.points_per_cell:
+                continue
 
-                chosen = rng.sample(
-                    range(len(available)),
-                    count
-                )
-
-                for index in chosen:
-                    y, x = available[index]
-
-                    x = int(x + x0)
-                    y = int(y + y0)
-
-                    node_id = len(self.nodes)
-
-                    self.nodes.append(
-                        self.grid_to_world(x, y)
-                    )
-
-                    self.edges[node_id] = {}
-                    self.cell_nodes[cell].append(node_id)
+            node_id = len(self.nodes)
+            self.nodes.append(self.grid_to_world(x, y))
+            self.edges[node_id] = {}
+            self.cell_nodes[cell].append(node_id)
 
         self._connect_nodes()
 
