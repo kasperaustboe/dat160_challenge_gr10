@@ -3,6 +3,8 @@ from rclpy.node import Node
 
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Float64
+from geometry_msgs.msg import Twist
+
 
 class RobotHandlerClass(Node):
     def __init__(self):
@@ -14,12 +16,12 @@ class RobotHandlerClass(Node):
         #      function use the existing clbk_lidar function 
 
         #---------------------------------------------------------------
-
+        self.sub = self.create_subscription(LaserScan, '/scan', self.clbk_lidar, 10)
 
 	    #---------------------------------------------------------------
         #TODO: Create Publisher that publishes messages of type Float64     
 
-
+        self.pub = self.create_publisher(Twist, '/cmd_vel', 10)
         #---------------------------------------------------------------
 
         self.lidar_value = 100.0
