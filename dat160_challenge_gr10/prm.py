@@ -215,7 +215,7 @@ class PRM:
 
         size = max(1, math.ceil(self.cell_size / self.resolution))
 
-        engine = qmc.PoissonDisk(d=2, radius=0.25, seed=self.seed)
+        engine = qmc.PoissonDisk(d=2, radius=0.025, seed=self.seed)
 
         unit_points = engine.fill_space()
 
