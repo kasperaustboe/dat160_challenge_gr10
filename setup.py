@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'leader = dat160_challenge_gr10.leader:main',
+            'robot_handler = dat160_challenge_gr10.robot_handler:main',
         ],
     },
 )
