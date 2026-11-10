@@ -62,8 +62,7 @@ class ExplorationManager:
             visits = self.visit_grid[row][col]
             dist = math.dist((current_x, current_y), (nx, ny))
             
-            too_close = max(0.0, 1.5 - dist)
-            cost = (visits * 150.0) + (dist * 0.5) + (too_close * 2.0)
+            cost = (visits * 150.0) + (dist * 0.5)
             if cost < min_cost:
                 min_cost = cost
                 best_node = (nx, ny)
@@ -92,7 +91,7 @@ class LeaderClass(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.odom_frames = {}
         self.reported_waits = set()
-        self.declare_parameter('rescue_radius', 0.8)
+        self.declare_parameter('rescue_radius', 1.5)
         self.declare_parameter('rescue_hold_seconds', 5.0)
         self.rescue_radius = float(self.get_parameter('rescue_radius').value)
         self.rescue_hold_seconds = float(self.get_parameter('rescue_hold_seconds').value)
@@ -197,7 +196,7 @@ class LeaderClass(Node):
         )
         self.last_odom[r_id] = self.get_clock().now().nanoseconds
         rescue = self.rescue
-        if rescue and rescue['targets'] is not None and r_id in rescue['robots']:
+        if rescue and r_id in rescue['targets']:
             if not self.rescue_robot_ready(rescue, r_id, self.last_odom[r_id]):
                 rescue['still_since'] = None
                 self.pending_reports.pop(4, None)
@@ -214,7 +213,7 @@ class LeaderClass(Node):
             self.held_robots.add(r_id)
         elif msg.data == 'RESCUE_READY':
             rescue = self.rescue
-            if (rescue and rescue['targets'] is not None and r_id in rescue['robots']
+            if (rescue and r_id in rescue['targets']
                     and r_id not in rescue['arrived']):
                 rescue['arrived'].add(r_id)
                 self.traffic.release(r_id)
@@ -287,7 +286,7 @@ class LeaderClass(Node):
             if marker_id == 4:
                 self.reported_waits.discard(('id4_tf_expired', r_id))
                 now = self.get_clock().now().nanoseconds
-                if (self.prm is None or self.pos[r_id] is None or self.pos[self.helper_id] is None
+                if (self.prm is None or self.pos[r_id] is None
                         or now < self.rescue_cooldown_until):
                     # Behold posisjonen i map før transformasjonen for bildet blir for gammel.
                     self.pending_observations[key] = ('map', stamp, pose)
@@ -375,15 +374,14 @@ class LeaderClass(Node):
         if normal[0] * view[0] + normal[1] * view[1] < 0:
             normal = (-normal[0], -normal[1])
         robots = (finder_id, self.helper_id)
-        if any(self.pos[r] is None for r in robots):
-            return
         self.rescue = {
             'robots': robots, 'position': position,
-            'targets': None, 'still_since': None,
-            'normal': normal, 'plan_started': now, 'report_wait_since': None,
-            'arrived': set(), 'planner': None, 'release_after': None,
+            'targets': {}, 'still_since': None,
+            'normal': normal, 'retry_at': now, 'report_wait_since': None,
+            'arrived': set(), 'release_after': None, 'warn_after': now + 3_000_000_000,
         }
         for rid in robots:
+            self.reported_waits.discard(('id4_wait', rid))
             self.scan_wait_started.pop(rid, None)
             self.held_robots.discard(rid)
             self.hold_pubs[rid].publish(Bool(data=True))
@@ -416,9 +414,13 @@ class LeaderClass(Node):
                 (point[1] - flame[1]) * normal[1]) <= 0.10:
             return False
         # Bruk råkartet for sikt, ikke robotens oppblåste sikkerhetsområde.
-        # Markørens egen celle kan være en veggcelle; resten må være fritt.
-        end_cell = self.prm.world_to_grid(*flame)
-        steps = max(1, math.ceil(math.dist(point, flame) / (self.prm.resolution / 3)))
+        gx, gy = self.prm.world_to_grid(*flame)
+        if not (0 <= gx < self.prm.width and 0 <= gy < self.prm.height):
+            return False
+        marker_in_wall = self.prm.grid[gy, gx] >= self.prm.obstacle_threshold
+        distance = math.dist(point, flame)
+        steps = max(1, math.ceil(distance / (self.prm.resolution / 3)))
+        hit_wall = False
         for i in range(steps + 1):
             t = i / steps
             x = point[0] + t * (flame[0] - point[0])
@@ -426,10 +428,15 @@ class LeaderClass(Node):
             gx, gy = self.prm.world_to_grid(x, y)
             if not (0 <= gx < self.prm.width and 0 <= gy < self.prm.height):
                 return False
-            if (gx, gy) == end_cell:
-                continue
             value = self.prm.grid[gy, gx]
-            if value < 0 or value >= self.prm.obstacle_threshold:
+            if value < 0:
+                return False
+            if value >= self.prm.obstacle_threshold:
+                # Godta bare veggceller i den siste sammenhengende biten ved markøren.
+                if not marker_in_wall or distance * (1 - t) > 0.25:
+                    return False
+                hit_wall = True
+            elif hit_wall:
                 return False
         return True
 
@@ -439,11 +446,10 @@ class LeaderClass(Node):
         # Sperr plassen fra oppstart, også før hjelpers odometri og TF er tilgjengelig.
         return {**self.pos, 'helper_spawn': self.helper_spawn}
 
-    def make_path(self, robot_id, target, extra_routes=None, *, rescue=False):
+    def make_path(self, robot_id, target):
         points = self.traffic.plan(
             self.prm, AStar, robot_id, self.pos[robot_id], target,
-            self.planning_positions(robot_id), extra_routes,
-            zone_side=None if rescue else EXPLORATION_SIDES.get(robot_id),
+            self.planning_positions(robot_id), zone_side=EXPLORATION_SIDES.get(robot_id),
         )
         if not points:
             return None
@@ -491,12 +497,12 @@ class LeaderClass(Node):
             )
             return None
 
-    def rescue_route_options(self, rescue):
-        finder, helper = rescue['robots']
+    def find_rescue_routes(self, rescue, ready_robots):
         flame = (rescue['position'].x, rescue['position'].y)
         outer = self.rescue_radius - 0.15
-        candidates = [p for p in self.prm.nodes if 0.40 <= math.dist(p, flame) <= outer]
-        for radius in (0.45, 0.55, outer):
+        candidate_points = [*self.prm.nodes, *(self.pos[r] for r in ready_robots)]
+        candidates = [p for p in candidate_points if 0.40 <= math.dist(p, flame) <= outer]
+        for radius in (0.45, 0.65, 1.0, outer):
             if not 0.40 <= radius <= outer:
                 continue
             for i in range(24):
@@ -505,57 +511,82 @@ class LeaderClass(Node):
                          flame[1] + radius * math.sin(angle))
                 if self.prm.is_free(*point):
                     candidates.append(point)
-        candidates = [p for p in candidates if self.flame_visible(p, rescue)]
-        # Velg korteste kjørbare hjelperrute først. Finneren må få plass ved siden av.
-        finder_candidates = sorted(candidates, key=lambda p: math.dist(p, self.pos[finder]))
-        helper_routes = self.traffic.shortest_routes(
-            self.prm, helper, self.pos[helper], candidates, self.planning_positions(helper)
-        )
-        for second_points in helper_routes:
-            second = second_points[-1]
-            second_path = self.path_from_points(helper, second_points)
-            if second_path is None:
-                return
-            for first in finder_candidates:
-                if math.dist(first, second) < self.traffic.clearance:
-                    continue
-                first_path = self.make_path(
-                    finder, first, extra_routes={helper: second_points}, rescue=True
-                )
-                if first_path is None:
-                    yield None  # Gi timeren en pause etter hvert rutesøk.
-                    continue
-                first_points = self.planned_points[finder]
-                yield ((first, second), (first_path, second_path), (first_points, second_points))
-
-        # Hvis hjelperens korteste ruter sperrer finneren, prøv å legge finnerens rute først.
-        for first in finder_candidates:
-            first_path = self.make_path(finder, first, rescue=True)
-            yield None
-            if first_path is None:
-                continue
-            first_points = self.planned_points[finder]
-            helper_routes = self.traffic.shortest_routes(
-                self.prm, helper, self.pos[helper], candidates, self.planning_positions(helper),
-                extra_routes={finder: first_points},
+        clearance = self.traffic.clearance
+        candidates = [p for p in candidates if self.flame_visible(p, rescue)
+                      and all(math.dist(p, target) >= clearance for target in rescue['targets'].values())]
+        options = {}
+        for robot_id in ready_robots:
+            # ID 4 bruker kartet og kjørelengden. Lidar håndterer hindringer under kjøring.
+            routes = self.traffic.shortest_routes(
+                self.prm, robot_id, self.pos[robot_id], candidates, {}, ignore_robots=self.robot_ids,
+                allow_start_escape=True,
             )
-            for second_points in helper_routes:
-                second_path = self.path_from_points(helper, second_points)
-                if second_path is None:
-                    return
-                yield ((first, second_points[-1]), (first_path, second_path),
-                       (first_points, second_points))
+            options[robot_id] = [
+                (math.dist(route[-1], flame) > 0.80,
+                 sum(math.dist(a, b) for a, b in zip(route, route[1:])), route)
+                for route in routes
+            ]
+
+        if len(ready_robots) == 2:
+            first, second = ready_robots
+            pair = min(
+                ((first_far + second_far, first_cost + second_cost, first_route, second_route)
+                 for first_far, first_cost, first_route in options[first]
+                 for second_far, second_cost, second_route in options[second]
+                 if math.dist(first_route[-1], second_route[-1]) >= clearance),
+                key=lambda option: option[:2], default=None,
+            )
+            if pair is not None:
+                return {first: pair[2], second: pair[3]}
+
+        # Hvis PRM-søket ikke finner en rute, bruk de ledige kartcellene direkte.
+        planned = {}
+        stops = list(rescue['targets'].values())
+        for robot_id in ready_robots:
+            best = min(
+                (option for option in options[robot_id]
+                 if all(math.dist(option[2][-1], stop) >= clearance for stop in stops)),
+                key=lambda option: option[:2], default=None,
+            )
+            route = best[2] if best else self.grid_rescue_route(self.pos[robot_id], flame, rescue['normal'], stops)
+            if route:
+                planned[robot_id] = route
+                stops.append(route[-1])
+        return planned
+
+    def grid_rescue_route(self, start, flame, normal, stops):
+        outer = self.rescue_radius - 0.15
+        radius = math.ceil(outer / self.prm.resolution)
+        fx, fy = self.prm.world_to_grid(*flame)
+        goals, close, preferred = set(), set(), set()
+        for y in range(max(0, fy - radius), min(self.prm.height, fy + radius + 1)):
+            for x in range(max(0, fx - radius), min(self.prm.width, fx + radius + 1)):
+                if not self.prm.navigable[y, x]:
+                    continue
+                point = self.prm.grid_to_world(x, y)
+                distance = math.dist(point, flame)
+                if not 0.40 <= distance <= outer or any(
+                        math.dist(point, stop) < self.traffic.clearance for stop in stops):
+                    continue
+                goals.add((x, y))
+                if distance <= 0.80:
+                    close.add((x, y))
+                    side = ((point[0] - flame[0]) * normal[0] + (point[1] - flame[1]) * normal[1])
+                    if side > 0.10:
+                        preferred.add((x, y))
+        return (self.prm.shortest_grid_route(start, preferred)
+                or self.prm.shortest_grid_route(start, close)
+                or self.prm.shortest_grid_route(start, goals))
 
     def rescue_robot_ready(self, rescue, robot_id, now):
-        target = rescue['targets'][rescue['robots'].index(robot_id)]
+        target = rescue['targets'].get(robot_id)
         flame = (rescue['position'].x, rescue['position'].y)
         position = self.pos[robot_id]
         stamp = self.last_odom[robot_id]
-        return (robot_id in rescue['arrived'] and stamp is not None
+        return (target is not None and robot_id in rescue['arrived'] and stamp is not None
                 and 0 <= now - stamp < 1_000_000_000 and position is not None
                 and math.dist(position, target) <= 0.15
                 and math.dist(position, flame) <= self.rescue_radius
-                and self.flame_visible(position, rescue)
                 and self.speed[robot_id][0] < 0.02 and self.speed[robot_id][1] < 0.03)
 
     def process_rescue(self):
@@ -573,46 +604,35 @@ class LeaderClass(Node):
             self.release_rescue()
             self.rescue_cooldown_until = now + 20_000_000_000
             return
-        if rescue['targets'] is None and now - rescue['plan_started'] > 20_000_000_000:
-            self.release_rescue('ID 4: fant ikke to ledige redningsruter. Robotene frigis.')
-            return
-        if rescue['targets'] is None:
-            # Vent på stoppbekreftelse før en ny rute sendes på et annet topic.
-            if not all(r in self.held_robots for r in robots):
-                for rid in robots:
-                    if rid not in self.held_robots:
-                        self.hold_pubs[rid].publish(Bool(data=True))
-                return
-            if any(self.rescue_path_pubs[r].get_subscription_count() == 0 for r in robots):
-                return
-            if rescue['planner'] is None:
-                rescue['planner'] = self.rescue_route_options(rescue)
-            for _ in range(3):
-                try:
-                    option = next(rescue['planner'])
-                except StopIteration:
-                    rescue['planner'] = None
-                    return
-                if option is None:
-                    continue
-                targets, paths, routes = option
-                # Andre roboter kan ha flyttet seg siden første rutesøk.
-                # Sjekk reservasjonene igjen før paret får kjøre.
-                for robot_id, points in zip(robots, routes):
-                    occupied = self.traffic.segments(robot_id, self.planning_positions(robot_id))
-                    if (math.dist(self.pos[robot_id], points[0]) > 0.10 or
-                            any(not self.traffic.clear_segment(a, b, occupied)
-                                for a, b in zip(points, points[1:]))):
-                        break
-                else:
-                    rescue['targets'] = targets
-                    rescue['planner'] = None
-                    if self.helper_at_spawn and self.helper_route_origin is None:
-                        self.helper_route_origin = self.pos[self.helper_id]
-                    for robot_id, points, path in zip(robots, routes, paths):
-                        self.traffic.reserve(robot_id, points)
-                        self.rescue_path_pubs[robot_id].publish(path)
-                    return
+        waiting = [r for r in robots if r not in rescue['targets']]
+        if waiting:
+            for rid in waiting:
+                if rid not in self.held_robots:
+                    self.hold_pubs[rid].publish(Bool(data=True))
+            ready = [r for r in waiting if r in self.held_robots and self.pos[r] is not None
+                     and self.rescue_path_pubs[r].get_subscription_count() > 0]
+            if ready and now >= rescue['retry_at']:
+                rescue['retry_at'] = now + 3_000_000_000
+                for robot_id, points in self.find_rescue_routes(rescue, ready).items():
+                    path = self.path_from_points(robot_id, points)
+                    if path is None:
+                        continue
+                    rescue['targets'][robot_id] = points[-1]
+                    if robot_id == self.helper_id and self.helper_at_spawn:
+                        self.helper_route_origin = self.pos[robot_id]
+                    self.traffic.reserve(robot_id, points)
+                    self.rescue_path_pubs[robot_id].publish(path)
+                    self.get_logger().info(f'{robot_id}: redningsrute til ID 4 sendt.')
+            if now >= rescue['warn_after']:
+                for rid in waiting:
+                    key = ('id4_wait', rid)
+                    if rid in rescue['targets'] or key in self.reported_waits:
+                        continue
+                    reason = 'ingen kjørbar rute eller TF for veipunktene' if rid in ready else (
+                        'venter på kartposisjon eller bekreftelse fra robot_handler'
+                    )
+                    self.get_logger().warning(f'{rid}: venter på redningsrute til ID 4 ({reason}).')
+                    self.reported_waits.add(key)
             return
         if not all(self.rescue_robot_ready(rescue, r, now) for r in robots):
             rescue['still_since'] = None
@@ -713,7 +733,7 @@ class LeaderClass(Node):
             return False
         # make_path legger robotens nåværende posisjon først. Den er ikke et stopp.
         points = self.planned_points[robot_id]
-        path_msg.poses = path_msg.poses[1:13]
+        path_msg.poses = path_msg.poses[1:21]
         if not path_msg.poses:
             return False
         self.traffic.reserve(robot_id, points[:1 + len(path_msg.poses)])

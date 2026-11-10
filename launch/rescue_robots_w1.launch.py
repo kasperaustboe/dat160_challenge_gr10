@@ -1,8 +1,4 @@
-import atexit
 import os
-import tempfile
-from pathlib import Path
-from xml.etree import ElementTree
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -13,37 +9,11 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def world_with_state_service(world_file_path):
-    """Lag en midlertidig oppstartskopi for Gazebos tilstandstjeneste."""
-    original = Path(world_file_path)
-    content = original.read_bytes()
-    world = ElementTree.fromstring(content).find('world')
-    if world is None:
-        raise ValueError(f'Mangler <world> i {original}')
-    if any(plugin.get('filename') == 'libgazebo_ros_state.so'
-           for plugin in world.findall('plugin')):
-        return world_file_path
-
-    before, closing, after = content.rpartition(b'</world>')
-    plugin = (
-        b'<plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">\n'
-        b'  <ros><namespace>/gazebo</namespace></ros>\n'
-        b'</plugin>\n  '
-    )
-    patched = before + plugin + closing + after
-    ElementTree.fromstring(patched)
-    temp_dir = tempfile.TemporaryDirectory(prefix='dat160-gazebo-')
-    atexit.register(temp_dir.cleanup)
-    temp_world = Path(temp_dir.name) / original.name
-    temp_world.write_bytes(patched)
-    return str(temp_world)
-
-
 def generate_launch_description():
     package_name = 'multi_robot_challenge_23'
 
     # Get the path to the world, map and rviz configuration file
-    world_file_path = os.path.join(get_package_share_directory(package_name), 'worlds', 'dat160_w1.world')
+    world_file_path = os.path.expanduser('~/ros2_ws/src/worlds/dat160_w1.world')
     map_file_path = os.path.join(get_package_share_directory(package_name), 'maps', 'map_dat160_w1.yaml')
     rviz_config_file_path = os.path.join(get_package_share_directory(package_name), 'rviz', 'model.rviz')
 
@@ -90,7 +60,7 @@ def generate_launch_description():
     # Starting Gazebo
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(get_package_share_directory('gazebo_ros'), 'launch'), '/gazebo.launch.py']),
-        launch_arguments={'world': world_with_state_service(world_file_path)}.items()
+        launch_arguments={'world': world_file_path}.items()
     )
 
     # Starting Map Server

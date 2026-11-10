@@ -60,12 +60,12 @@ class RouteReservations:
             self.routes.pop(robot_id, None)
         self._cache.clear()
 
-    def segments(self, robot_id, positions, extra_routes=None):
+    def segments(self, robot_id, positions, extra_routes=None, *, ignore_robots=()):
         routes = dict(self.routes)
         routes.update(extra_routes or {})
         result = []
         for other in set(positions) | set(routes):
-            if other == robot_id:
+            if other == robot_id or other in ignore_robots:
                 continue
             position = positions.get(other)
             if position is not None:
@@ -90,10 +90,13 @@ class RouteReservations:
                 return False
         return True
 
-    def shortest_routes(self, prm, robot_id, start, goals, positions, extra_routes=None):
+    def shortest_routes(self, prm, robot_id, start, goals, positions, extra_routes=None, *,
+                        ignore_robots=(), allow_start_escape=False):
         """Gi én korteste rute per nåbart mål, sortert etter kjørelengde."""
-        occupied = self.segments(robot_id, positions, extra_routes)
-        if not prm.is_free(*start) or not self.clear_segment(start, start, occupied):
+        occupied = self.segments(robot_id, positions, extra_routes, ignore_robots=ignore_robots)
+        start_free = prm.is_free(*start)
+        escape = allow_start_escape and not start_free
+        if (not start_free and not escape) or not self.clear_segment(start, start, occupied):
             return
         goals = [goal for goal in dict.fromkeys(goals) if prm.is_free(*goal)
                  and self.clear_segment(goal, goal, occupied)]
@@ -134,14 +137,21 @@ class RouteReservations:
                 # PRM-kantene er allerede sjekket mot kartet. Nye koblinger må sjekkes her.
                 if current == start_id or neighbor in goal_ids:
                     direct = current == start_id and neighbor in goal_ids
-                    if (not direct and length > prm.max_edge_length) or not prm.line_is_free(point, end):
+                    if not direct and length > prm.max_edge_length:
+                        continue
+                    if escape and current == start_id:
+                        clear = prm.line_is_free(point, end, leave_margin=True)
+                    else:
+                        clear = prm.line_is_free(point, end)
+                    if not clear:
                         continue
                 if self.clear_segment(point, end, occupied):
                     distances[neighbor] = candidate
                     previous[neighbor] = current
                     heapq.heappush(queue, (candidate, neighbor))
 
-    def plan(self, prm, astar, robot_id, start, goal, positions, extra_routes=None, *, zone_side=None):
+    def plan(self, prm, astar, robot_id, start, goal, positions, extra_routes=None, *,
+             zone_side=None, ignore_robots=()):
         # Besøkte mål inngår ikke i sperringen. Bare aktive ruter og robotenes
         # nåværende posisjoner brukes her.
         if not in_y_zone(goal, zone_side):
@@ -151,11 +161,13 @@ class RouteReservations:
             return None
         routes = dict(self.routes)
         routes.update(extra_routes or {})
-        key = (id(prm), robot_id, zone_side, returning_to_zone,
+        key = (id(prm), robot_id, zone_side, returning_to_zone, frozenset(ignore_robots),
                tuple(sorted((r, tuple(p) if p is not None else None) for r, p in positions.items())),
                tuple(sorted((r, tuple(points)) for r, points in routes.items())))
         cached = self._cache.get(key)
-        occupied = cached[2] if cached is not None else self.segments(robot_id, positions, extra_routes)
+        occupied = cached[2] if cached is not None else self.segments(
+            robot_id, positions, extra_routes, ignore_robots=ignore_robots,
+        )
         if (not self.clear_segment(start, start, occupied) or
                 not self.clear_segment(goal, goal, occupied)):
             return None

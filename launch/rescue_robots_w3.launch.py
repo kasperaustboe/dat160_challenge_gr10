@@ -1,30 +1,44 @@
 import os
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
+
 
 def generate_launch_description():
     package_name = 'multi_robot_challenge_23'
 
     # Get the path to the world, map and rviz configuration file
-    world_file_path = os.path.join(get_package_share_directory(package_name), 'worlds', 'dat160_w3.world')
+    world_file_path = os.path.expanduser('~/ros2_ws/src/worlds/dat160_w3.world')
     map_file_path = os.path.join(get_package_share_directory(package_name), 'maps', 'map_dat160_w3.yaml')
     rviz_config_file_path = os.path.join(get_package_share_directory(package_name), 'rviz', 'model.rviz')
 
     # Namespace of each robot
     first_tb3 = 'tb3_0'
     second_tb3 = 'tb3_1'
+    third_tb3 = 'tb3_2'
+    fourth_tb3 = 'tb3_3'
+    fifth_tb3 = 'tb3_4'
+
     # Starting position in the gazebo world of each robot
-    first_tb3_pos = ['-1.0', '0.5', '0.0']
-    second_tb3_pos = ['-1.0', '-1.5', '0.0']
-    #Starting orientation in the gazebo world of each robot
+    first_tb3_pos = ['-1.0', '1.5', '0.0']
+    second_tb3_pos = ['-1.0', '-2.5', '0.0']
+    third_tb3_pos = ['-2.2', '0.0', '0.0']
+
+    #Disse 2 under spawner etter 100 sek men bruker samme som første og andre
+    fourth_tb3_pos = ['-1.0', '0.6', '0.0']
+    fifth_tb3_pos = ['-1.0', '-1.6', '0.0']
+
+    # Starting orientation in the gazebo world of each robot
     first_tb3_yaw = '0.0'
     second_tb3_yaw = '0.0'
+    third_tb3_yaw = '0.0'
+    fourth_tb3_yaw = '0.0'
+    fifth_tb3_yaw = '0.0'
 
     # Declaring use_sim_time as a launch argument that can then be used in all launch files
     sim_time_arg = DeclareLaunchArgument(
@@ -34,6 +48,14 @@ def generate_launch_description():
     )
     # Get launch argument use_sim_time as a launch configuration object
     use_sim_time = LaunchConfiguration('use_sim_time')
+
+    scoring = Node(
+        package='scoring',
+        executable='scoring',
+        name='scoring',
+        parameters=[{'use_sim_time': use_sim_time}],
+        output='screen',
+    )
 
     # Starting Gazebo
     gazebo = IncludeLaunchDescription(
@@ -50,6 +72,7 @@ def generate_launch_description():
         parameters=[{"yaml_filename": map_file_path, "topic_name": "map", "frame_id": "map"}],
         # remappings=remappings
     )
+
     # Starting a lifecycle manager that takes care of the map server
     lifecycle_manager = Node(
         package='nav2_lifecycle_manager',
@@ -72,7 +95,7 @@ def generate_launch_description():
         }.items()
     )
 
-    # Spawning the second robot 
+    # Spawning the second robot
     tb3_1 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(get_package_share_directory(package_name), 'launch'), '/spawn_robot.launch.py']),
         launch_arguments={
@@ -82,6 +105,34 @@ def generate_launch_description():
             'yaw': second_tb3_yaw,
         }.items()
     )
+
+    # Spawning the third robot
+    tb3_2 = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory(package_name), 'launch'), '/spawn_robot.launch.py']),
+        launch_arguments={
+            'namespace': third_tb3,
+            'x': third_tb3_pos[0],
+            'y': third_tb3_pos[1],
+            'yaw': third_tb3_yaw,
+        }.items()
+    )
+    tb3_3 = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory(package_name), 'launch'), '/spawn_robot.launch.py']),
+        launch_arguments={
+            'namespace': fourth_tb3, 'x': fourth_tb3_pos[0],
+            'y': fourth_tb3_pos[1], 'yaw': fourth_tb3_yaw,
+            'use_sim_time': use_sim_time,
+        }.items()
+    )
+    tb3_4 = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([os.path.join(get_package_share_directory(package_name), 'launch'), '/spawn_robot.launch.py']),
+        launch_arguments={
+            'namespace': fifth_tb3, 'x': fifth_tb3_pos[0],
+            'y': fifth_tb3_pos[1], 'yaw': fifth_tb3_yaw,
+            'use_sim_time': use_sim_time,
+        }.items()
+    )
+    delayed_robots = TimerAction(period=100.0, actions=[tb3_3, tb3_4])
 
     # Starting rviz
     rviz_node = Node(
@@ -100,5 +151,8 @@ def generate_launch_description():
         lifecycle_manager,
         tb3_0,
         tb3_1,
+        tb3_2,
+        delayed_robots,
         rviz_node,
+        scoring,
     ])

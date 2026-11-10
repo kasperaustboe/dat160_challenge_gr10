@@ -220,11 +220,6 @@ class RobotHandlerClass(Node):
                     self.pubs_status[r_id].publish(status_msg)
                 return
 
-            # Bekreft ankomst selv om det er en hindring foran roboten.
-            if r['lidar'] < 0.25:
-                self.pubs_cmd_vel[r_id].publish(twist)
-                return
-
             # Beregn vinkelavvik mot målet
             angle_diff = (math.atan2(dy, dx) - r['yaw'] + math.pi) % (2 * math.pi) - math.pi
 
@@ -232,9 +227,9 @@ class RobotHandlerClass(Node):
             if abs(angle_diff) > 0.15:
                 twist.angular.z = 0.5 if angle_diff > 0 else -0.5
                 twist.linear.x = 0.0
-            else:
+            elif r['lidar'] >= 0.25:
                 twist.angular.z = 0.8 * angle_diff
-                twist.linear.x = 0.22
+                twist.linear.x = 0.3 #Fart
 
             self.pubs_cmd_vel[r_id].publish(twist)
 

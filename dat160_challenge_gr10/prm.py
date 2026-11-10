@@ -1,3 +1,4 @@
+import heapq
 import math
 import random
 from collections import defaultdict
@@ -62,7 +63,9 @@ class PRM:
         self.edges = {}
         self.cell_nodes = {}
 
-        self.free = self._make_free_grid()
+        self._wall_distances = None
+        self.navigable = self._make_free_grid()
+        self.free = self.navigable
         if reachable_from is not None:
             self.free = self._reachable_free_grid(reachable_from)
 
@@ -154,6 +157,7 @@ class PRM:
         # Beregn avstanden til nærmeste hindring.
         distances = distance_transform_edt(padded)[1:-1, 1:-1]
         distances *= self.resolution
+        self._wall_distances = distances
 
         # Fjern celler som ligger for nær hindringer.
         safe &= distances > margin
@@ -182,7 +186,7 @@ class PRM:
             and self.free[gy, gx]
         )
 
-    def line_is_free(self, start, end):
+    def line_is_free(self, start, end, *, leave_margin=False, unfiltered=False):
         distance = math.dist(start, end)
 
         steps = max(
@@ -222,7 +226,81 @@ class PRM:
         if not np.all(valid):
             return False
 
-        return bool(np.all(self.free[gy, gx]))
+        mask = self.navigable if unfiltered else self.free
+        free = mask[gy, gx]
+        if np.all(free):
+            return True
+        if (not leave_margin or self._wall_distances is None or distance > 0.45
+                or free[0] or not free[-1]):
+            return False
+
+        # Roboten kan allerede stå innenfor marginen. La den kjøre en kort vei
+        # bort fra veggen, med vanlig sikkerhetsmargin så snart den er ute.
+        raw = self.grid[gy, gx]
+        first_free = np.argmax(free)
+        clearance = self._wall_distances[gy[:first_free + 1], gx[:first_free + 1]]
+        return bool(np.all((raw >= 0) & (raw < self.obstacle_threshold))
+                    and np.all(free[first_free:]) and np.all(np.diff(clearance) >= 0))
+
+    def shortest_grid_route(self, start, goals):
+        """Finn en rute i kartcellene uten å bruke PRM-grafen."""
+        free = self.navigable
+        if not goals:
+            return None
+        sx, sy = self.world_to_grid(*start)
+        if not (0 <= sx < self.width and 0 <= sy < self.height):
+            return None
+
+        if free[sy, sx]:
+            costs = {(sx, sy): 0.0}
+        else:
+            # Bruk samme kontrollerte utgang fra sikkerhetsmarginen som i PRM-søket.
+            radius = math.ceil(0.45 / self.resolution)
+            costs = {}
+            for y in range(max(0, sy - radius), min(self.height, sy + radius + 1)):
+                for x in range(max(0, sx - radius), min(self.width, sx + radius + 1)):
+                    point = self.grid_to_world(x, y)
+                    if free[y, x] and self.line_is_free(start, point, leave_margin=True, unfiltered=True):
+                        costs[(x, y)] = math.dist(start, point)
+
+        goal_x, goal_y = zip(*goals)
+        xmin, xmax, ymin, ymax = min(goal_x), max(goal_x), min(goal_y), max(goal_y)
+
+        def estimate(x, y):
+            return self.resolution * math.hypot(max(xmin - x, 0, x - xmax), max(ymin - y, 0, y - ymax))
+
+        steps = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1))
+        queue = [(cost + estimate(*cell), cost, cell) for cell, cost in costs.items()]
+        heapq.heapify(queue)
+        previous = {}
+        while queue:
+            _, cost, cell = heapq.heappop(queue)
+            if cost != costs[cell]:
+                continue
+            if cell in goals:
+                cells = [cell]
+                while cell in previous:
+                    cell = previous[cell]
+                    cells.append(cell)
+                cells.reverse()
+                # Behold bare punktene der retningen endres og det siste stoppunktet.
+                corners = [b for a, b, c in zip(cells, cells[1:], cells[2:])
+                           if (b[0] - a[0], b[1] - a[1]) != (c[0] - b[0], c[1] - b[1])]
+                return [start] + [self.grid_to_world(*p) for p in (cells[0], *corners, cells[-1])]
+            x, y = cell
+            for dx, dy in steps:
+                nx, ny = x + dx, y + dy
+                if not (0 <= nx < self.width and 0 <= ny < self.height and free[ny, nx]):
+                    continue
+                if dx and dy and (not free[y, nx] or not free[ny, x]):
+                    continue
+                neighbor = (nx, ny)
+                new_cost = cost + self.resolution * math.hypot(dx, dy)
+                if new_cost < costs.get(neighbor, math.inf):
+                    costs[neighbor] = new_cost
+                    previous[neighbor] = cell
+                    heapq.heappush(queue, (new_cost + estimate(nx, ny), new_cost, neighbor))
+        return None
 
     def generate(self):
         self.nodes = []
