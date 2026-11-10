@@ -4,7 +4,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry, Path
-from std_msgs.msg import String, Bool
+from std_msgs.msg import String, Bool, Empty
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, qos_profile_sensor_data
 
 class RobotHandlerClass(Node):
@@ -24,6 +24,10 @@ class RobotHandlerClass(Node):
             self.create_subscription(LaserScan, f'/{r_id}/scan', lambda msg, idx=i: self.clbk_lidar(msg, idx), qos_profile_sensor_data)
             self.create_subscription(Odometry, f'/{r_id}/odom', lambda msg, idx=i: self.clbk_odom(msg, idx), qos_profile_sensor_data)
             self.create_subscription(Path, f'/{r_id}/path', lambda msg, idx=i: self.clbk_path(msg, idx), 10)
+            self.create_subscription(
+                Empty, f'/{r_id}/scan_left',
+                lambda msg, idx=i: self.clbk_scan_left(msg, idx), 10,
+            )
 
             # Kommando for å stoppe eller frigi roboten
             self.create_subscription(
@@ -58,7 +62,10 @@ class RobotHandlerClass(Node):
             'path': [],
             'state': 'IDLE',
             'rescue': False,
-            'odom_received': False
+            'odom_received': False,
+            'scan_started': None,
+            'scan_yaw': None,
+            'scan_angle': 0.0,
         }
 
     def clbk_lidar(self, msg, r_id):
@@ -80,8 +87,12 @@ class RobotHandlerClass(Node):
             and self.robots[r_id]['state'] == 'IDLE'
             and len(msg.poses) > 0
         ):
-            self.robots[r_id]['path'] = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
-            self.robots[r_id]['state'] = 'NAVIGATE'
+            r = self.robots[r_id]
+            if r['scan_started'] is not None:
+                self.pubs_cmd_vel[r_id].publish(Twist())
+            r['path'] = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
+            r['state'] = 'NAVIGATE'
+            r['scan_started'] = None
             robot_name = self.robot_ids[r_id]
             self.get_logger().info(f'{robot_name} mottok rute med {len(msg.poses)} punkter. Kjører direkte!')
 
@@ -102,6 +113,7 @@ class RobotHandlerClass(Node):
         # Avbryt gjeldende rute og stopp roboten
         r['path'] = []
         r['rescue'] = msg.data
+        r['scan_started'] = None
 
         status_msg = String()
 
@@ -128,11 +140,36 @@ class RobotHandlerClass(Node):
             for p in msg.poses
         ]
         r['state'] = 'NAVIGATE'
+        r['scan_started'] = None
 
         robot_name = self.robot_ids[r_id]
         self.get_logger().info(
             f'{robot_name} mottok redningsrute til stor flamme.'
         )
+
+    def clbk_scan_left(self, msg, r_id):
+        r = self.robots[r_id]
+        if (self.mission_stopped or r['state'] != 'IDLE' or not r['odom_received']
+                or r['scan_started'] is not None or self.robot_ids[r_id] == 'tb3_2'):
+            return
+        r['scan_started'] = self.get_clock().now().nanoseconds
+        r['scan_yaw'] = r['yaw']
+        r['scan_angle'] = 0.0
+
+    def scan_while_waiting(self, r_id, twist):
+        r = self.robots[r_id]
+        if r['scan_started'] is None or r['scan_angle'] >= math.tau:
+            return
+
+        yaw = r['yaw']
+        r['scan_angle'] += (yaw - r['scan_yaw'] + math.pi) % math.tau - math.pi
+        r['scan_yaw'] = yaw
+        elapsed = self.get_clock().now().nanoseconds - r['scan_started']
+        if elapsed >= 35_000_000_000:
+            r['scan_angle'] = math.tau
+        if r['scan_angle'] < math.tau:
+            twist.angular.z = 0.25
+        self.pubs_cmd_vel[r_id].publish(twist)
 
     def process_robot(self, r_id):
         r = self.robots[r_id]
@@ -142,6 +179,10 @@ class RobotHandlerClass(Node):
         # Bli stående til leader sender redningsrute eller frigir roboten
         if r['state'] == 'HOLD':
             self.pubs_cmd_vel[r_id].publish(twist)
+            return
+
+        if r['state'] == 'IDLE':
+            self.scan_while_waiting(r_id, twist)
             return
 
         if r['state'] == 'NAVIGATE' and not r['odom_received']:

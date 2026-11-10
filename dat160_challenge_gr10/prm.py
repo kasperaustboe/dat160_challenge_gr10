@@ -3,7 +3,7 @@ import random
 from collections import defaultdict
 
 import numpy as np
-from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import distance_transform_edt, label
 from scipy.stats import qmc
 
 
@@ -21,6 +21,7 @@ class PRM:
         robot_radius=0.22,
         obstacle_threshold=50,
         seed=42,
+        reachable_from=None,
     ):
         self.grid = np.asarray(grid, dtype=np.int16)
 
@@ -62,6 +63,8 @@ class PRM:
         self.cell_nodes = {}
 
         self.free = self._make_free_grid()
+        if reachable_from is not None:
+            self.free = self._reachable_free_grid(reachable_from)
 
         self.generate()
 
@@ -156,6 +159,19 @@ class PRM:
         safe &= distances > margin
 
         return safe
+
+    def _reachable_free_grid(self, spawn_points):
+        # Nummerer områdene som henger sammen via frie naboceller.
+        components, _ = label(self.free)
+        spawn_components = set()
+        for x, y in spawn_points:
+            gx, gy = self.world_to_grid(x, y)
+            if 0 <= gx < self.width and 0 <= gy < self.height and self.free[gy, gx]:
+                spawn_components.add(components[gy, gx])
+
+        if not spawn_components:
+            raise ValueError('Ingen startposisjoner ligger i et ledig PRM-område')
+        return np.isin(components, list(spawn_components))
 
     def is_free(self, x, y):
         gx, gy = self.world_to_grid(x, y)

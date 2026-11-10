@@ -4,7 +4,7 @@ import numpy as np
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from geometry_msgs.msg import Point, PoseStamped
-from std_msgs.msg import String, Bool
+from std_msgs.msg import String, Bool, Empty
 from tf2_ros import Buffer, TransformListener, TransformException
 import tf2_geometry_msgs
 from visualization_msgs.msg import Marker, MarkerArray
@@ -62,7 +62,8 @@ class ExplorationManager:
             visits = self.visit_grid[row][col]
             dist = math.dist((current_x, current_y), (nx, ny))
             
-            cost = (visits * 150.0) + (dist * 0.5)
+            too_close = max(0.0, 1.5 - dist)
+            cost = (visits * 150.0) + (dist * 0.5) + (too_close * 2.0)
             if cost < min_cost:
                 min_cost = cost
                 best_node = (nx, ny)
@@ -119,6 +120,11 @@ class LeaderClass(Node):
         }
         self.pos = {r: None for r in self.robot_ids}
         self.is_exploring = {r: False for r in self.robot_ids}
+        self.scan_wait_started = {}
+        self.scan_left_pubs = {
+            r: self.create_publisher(Empty, f'/{r}/scan_left', 10)
+            for r in EXPLORATION_SIDES
+        }
 
         self.observed_markers = set()
         self.observed_id4 = False
@@ -378,6 +384,7 @@ class LeaderClass(Node):
             'arrived': set(), 'planner': None, 'release_after': None,
         }
         for rid in robots:
+            self.scan_wait_started.pop(rid, None)
             self.held_robots.discard(rid)
             self.hold_pubs[rid].publish(Bool(data=True))
             self.is_exploring[rid] = True
@@ -657,6 +664,19 @@ class LeaderClass(Node):
                     continue
                 self.reported_waits.discard(('subscriber', r_id))
                 self.assign_new_target(r_id, self.pos[r_id], self.path_pubs[r_id])
+                if not self.is_exploring[r_id]:
+                    self.request_left_scan(r_id)
+
+    def request_left_scan(self, robot_id):
+        now = self.get_clock().now().nanoseconds
+        started = self.scan_wait_started.setdefault(robot_id, now)
+        if started is None or now - started < 3_000_000_000:
+            return
+        publisher = self.scan_left_pubs[robot_id]
+        if publisher.get_subscription_count() > 0:
+            publisher.publish(Empty())
+            # Én skann per venteperiode. Neste rute nullstiller ventingen.
+            self.scan_wait_started[robot_id] = None
 
     def assign_new_target(self, robot_id, start_pos, publisher):
         if publisher.get_subscription_count() == 0:
@@ -673,6 +693,7 @@ class LeaderClass(Node):
         if target:
             if self.send_path(start_pos, target, publisher, robot_id):
                 self.is_exploring[robot_id] = True
+                self.scan_wait_started.pop(robot_id, None)
                 self.reported_waits.discard(('route', robot_id))
                 return
             self.debug_once(
@@ -692,7 +713,7 @@ class LeaderClass(Node):
             return False
         # make_path legger robotens nåværende posisjon først. Den er ikke et stopp.
         points = self.planned_points[robot_id]
-        path_msg.poses = path_msg.poses[1:11]
+        path_msg.poses = path_msg.poses[1:13]
         if not path_msg.poses:
             return False
         self.traffic.reserve(robot_id, points[:1 + len(path_msg.poses)])
@@ -788,7 +809,12 @@ class LeaderClass(Node):
         if self.prm is not None:
             return
         try:
-            self.prm = PRM.from_occupancy_grid(msg, cell_size=1.5, points_per_cell=15, neighbors=12, max_edge_length=3.0, robot_radius=0.32)
+            # W1: tb3_3 og tb3_4 deler startplassene til tb3_0 og tb3_1.
+            spawn_points = [(0.0, -1.0), (0.0, 1.0), self.helper_spawn]
+            self.prm = PRM.from_occupancy_grid(
+                msg, cell_size=1.5, points_per_cell=15, neighbors=12,
+                max_edge_length=3.0, robot_radius=0.32, reachable_from=spawn_points,
+            )
             map_width = msg.info.width * msg.info.resolution
             map_height = msg.info.height * msg.info.resolution
             origin_x = msg.info.origin.position.x
