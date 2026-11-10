@@ -25,6 +25,7 @@ setup(
         'console_scripts': [
             'leader = dat160_challenge_gr10.leader:main',
             'robot_handler = dat160_challenge_gr10.robot_handler:main',
+            'wall_coverage = dat160_challenge_gr10.wall_coverage:main',
         ],
     },
 )
