@@ -10,10 +10,10 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    package_name = 'multi_robot_challenge_23'
+    package_name = 'dat160_challenge_gr10'
 
     # Get the path to the world, map and rviz configuration file
-    world_file_path = os.path.expanduser('~/ros2_ws/src/worlds/dat160_w2.world')
+    world_file_path = os.path.join(get_package_share_directory(package_name), 'worlds', 'dat160_w2.world')
     map_file_path = os.path.join(get_package_share_directory(package_name), 'maps', 'map_dat160_w2.yaml')
     rviz_config_file_path = os.path.join(get_package_share_directory(package_name), 'rviz', 'model.rviz')
 
