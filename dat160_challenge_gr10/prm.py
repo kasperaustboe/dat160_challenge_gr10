@@ -254,7 +254,7 @@ class PRM:
         if free[sy, sx]:
             costs = {(sx, sy): 0.0}
         else:
-            # Bruk samme kontrollerte utgang fra sikkerhetsmarginen som i PRM-søket.
+            #Samme kontrollerte utgang fra sikkerhetsmarginen som i PRM-søket.
             radius = math.ceil(0.45 / self.resolution)
             costs = {}
             for y in range(max(0, sy - radius), min(self.height, sy + radius + 1)):
