@@ -20,7 +20,7 @@ ros2 run dat160_challenge_gr10 leader --ros-args -p use_sim_time:=true
 # Start commands for the competition DAT160:
 
 Launch simulation:
-ros2 launch dat160_challenge_gr10 rescue_robots_w1.launch.py
+ros2 launch dat160_challenge_gr10 rescue_robots_w1.launch.py // W1/W2/W3/W4/W5
 
 Launch: Leader + handler:
 
