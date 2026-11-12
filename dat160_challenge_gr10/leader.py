@@ -236,15 +236,11 @@ class LeaderClass(Node):
                 self.get_logger().info(f'{r_id} oppdaget markør ID {marker_id}.')
             if marker_id in self.found_qrs:
                 continue
-            # Samme optiske kameraramme som i deres opprinnelige marker_pose.py.
-            # Noen versjoner av aruco_node publiserer et tomt frame_id.
             frame = (
                 msg.header.frame_id or f'{r_id}/camera_rgb_optical_frame'
             ).lstrip('/')
             key = (r_id, marker_id)
-            # Behold det opprinnelige tidsstempelet til TF er tilgjengelig.
-            # Kontinuerlig overskriving med nyeste bilde kan ellers gi en
-            # endeløs rekke ekstrapolasjonsfeil når TF ligger litt etter kamera.
+
             self.pending_observations.setdefault(
                 key, (frame, msg.header.stamp, camera_pose)
             )
@@ -270,8 +266,7 @@ class LeaderClass(Node):
                     f'{r_id}: ID {marker_id} er observert, men venter på '
                     f'TF fra {frame} til map: {ex}'
                 )
-                # Et gammelt bilde kan ligge utenfor TF-bufferens historikk.
-                # Gi da plass til en ny deteksjon med et ferskere tidsstempel.
+
                 image_time = rclpy.time.Time.from_msg(stamp).nanoseconds
                 if self.get_clock().now().nanoseconds - image_time > 3_000_000_000:
                     warning_key = ('id4_tf_expired', r_id)
@@ -288,7 +283,7 @@ class LeaderClass(Node):
                 now = self.get_clock().now().nanoseconds
                 if (self.prm is None or self.pos[r_id] is None
                         or now < self.rescue_cooldown_until):
-                    # Behold posisjonen i map før transformasjonen for bildet blir for gammel.
+                            
                     self.pending_observations[key] = ('map', stamp, pose)
                     continue
             self.pending_observations.pop(key, None)
@@ -299,7 +294,7 @@ class LeaderClass(Node):
             )
             if marker_id == 4:
                 q = pose.orientation
-                # Markørens lokale z-akse er normalen til markørflaten.
+                
                 normal = (2 * (q.x * q.z + q.w * q.y),
                           2 * (q.y * q.z - q.w * q.x))
                 self.start_rescue(r_id, position, normal)
@@ -324,7 +319,7 @@ class LeaderClass(Node):
         future.add_done_callback(lambda f: self.clbk_score_response(f, marker_id))
 
     def clbk_score_response(self, future, marker_id):
-        # Et sent svar fra et avbrutt forsøk må ikke frigi et nytt redningspar.
+        
         if self.score_futures.get(marker_id) is not future:
             return
         self.score_futures.pop(marker_id, None)
@@ -409,11 +404,11 @@ class LeaderClass(Node):
     def flame_visible(self, point, rescue):
         flame = (rescue['position'].x, rescue['position'].y)
         normal = rescue['normal']
-        # Samme side av markørflaten som kameraet som observerte den.
+        
         if ((point[0] - flame[0]) * normal[0] +
                 (point[1] - flame[1]) * normal[1]) <= 0.10:
             return False
-        # Bruk råkartet for sikt, ikke robotens oppblåste sikkerhetsområde.
+        
         gx, gy = self.prm.world_to_grid(*flame)
         if not (0 <= gx < self.prm.width and 0 <= gy < self.prm.height):
             return False
@@ -432,7 +427,7 @@ class LeaderClass(Node):
             if value < 0:
                 return False
             if value >= self.prm.obstacle_threshold:
-                # Godta bare veggceller i den siste sammenhengende biten ved markøren.
+                
                 if not marker_in_wall or distance * (1 - t) > 0.25:
                     return False
                 hit_wall = True
@@ -443,7 +438,7 @@ class LeaderClass(Node):
     def planning_positions(self, robot_id):
         if robot_id == self.helper_id or not self.helper_at_spawn:
             return self.pos
-        # Sperr plassen fra oppstart, også før hjelpers odometri og TF er tilgjengelig.
+        
         return {**self.pos, 'helper_spawn': self.helper_spawn}
 
     def make_path(self, robot_id, target):
@@ -472,8 +467,7 @@ class LeaderClass(Node):
         return result
 
     def path_to_odom(self, message, robot_id):
-        # Robot_handler sammenligner med rå odometri. Send derfor rutepunktene
-        # i akkurat den robotens odometriramme, mens planleggingen bruker map.
+
         frame = self.odom_frames.get(robot_id)
         if frame is None:
             return None
@@ -516,7 +510,7 @@ class LeaderClass(Node):
                       and all(math.dist(p, target) >= clearance for target in rescue['targets'].values())]
         options = {}
         for robot_id in ready_robots:
-            # ID 4 bruker kartet og kjørelengden. Lidar håndterer hindringer under kjøring.
+           
             routes = self.traffic.shortest_routes(
                 self.prm, robot_id, self.pos[robot_id], candidates, {}, ignore_robots=self.robot_ids,
                 allow_start_escape=True,
@@ -695,7 +689,7 @@ class LeaderClass(Node):
         publisher = self.scan_left_pubs[robot_id]
         if publisher.get_subscription_count() > 0:
             publisher.publish(Empty())
-            # Én skann per venteperiode. Neste rute nullstiller ventingen.
+            
             self.scan_wait_started[robot_id] = None
 
     def assign_new_target(self, robot_id, start_pos, publisher):
@@ -731,7 +725,7 @@ class LeaderClass(Node):
         path_msg = self.make_path(robot_id, target)
         if path_msg is None:
             return False
-        # make_path legger robotens nåværende posisjon først. Den er ikke et stopp.
+        
         points = self.planned_points[robot_id]
         path_msg.poses = path_msg.poses[1:21]
         if not path_msg.poses:
@@ -782,7 +776,7 @@ class LeaderClass(Node):
             nodes.scale.x = nodes.scale.y = nodes.scale.z = 0.18
             nodes.color.r = nodes.color.g = 1.0
             nodes.color.a = 1.0
-            # Første punkt er robotens posisjon; resten er gjenstående veipunkter.
+            # Første punkt er robotens posisjon, resten er gjenstående veipunkter.
             for point in points[1:]:
                 if point not in visited:
                     nodes.points.append(Point(x=float(point[0]), y=float(point[1]), z=0.08))
@@ -829,7 +823,7 @@ class LeaderClass(Node):
         if self.prm is not None:
             return
         try:
-            # W1: tb3_3 og tb3_4 deler startplassene til tb3_0 og tb3_1.
+            
             spawn_points = [(0.0, -1.0), (0.0, 1.0), self.helper_spawn]
             self.prm = PRM.from_occupancy_grid(
                 msg, cell_size=1.5, points_per_cell=15, neighbors=12,
