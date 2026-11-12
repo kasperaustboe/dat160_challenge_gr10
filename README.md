@@ -5,7 +5,7 @@ I rviz Add -> ByTopic -> Under "prm_graph" -> trykk på "MarkerArray"
 
 Må også legge til andre topics for å se de 2 andre robotene ++
 
-Startes med : Dette brukes kun for debug nå
+Startes med : Dette brukes kun for debug nå av hvert enkel python fil
 
 ros2 run rqt_image_view rqt_image_view
 
@@ -17,12 +17,11 @@ ros2 run dat160_challenge_gr10 leader --ros-args -p use_sim_time:=true
 
 
 
-# NYE START KOMMANDOER SLIK AT DEN STARTER MED KUN 2
+# Start commands for the competition DAT160:
 
-# Starter Gazebo ++
-
+Launch simulation:
 ros2 launch dat160_challenge_gr10 rescue_robots_w1.launch.py
 
-# Starter Leader, controller osv
+Launch: Leader + handler:
 
 ros2 launch dat160_challenge_gr10 controllers.launch.py
