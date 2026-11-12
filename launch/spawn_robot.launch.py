@@ -12,7 +12,7 @@ import xacro
 
 
 # Name of the package that conatins the robot description xacro file
-package_name_robot = 'multi_robot_challenge_23'
+package_name_robot = 'dat160_challenge_gr10'
 
 # Function to read the robot description from the xacro file and return a SetLaunchConfiguration object
 def get_robot_description(context):
