@@ -1,3 +1,4 @@
+#Ikke i bruk, ble brukt under oppstartsfase
 import hashlib
 import json
 import math

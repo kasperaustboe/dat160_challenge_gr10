@@ -1,1 +1,0 @@
-#kode for kollisjonshåndtering i ruten
