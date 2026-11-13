@@ -1,4 +1,4 @@
-#Ruter trafikken så de ikke kræsjer
+"""Reserverer ruter slik at robotene ikke kjører inn i hverandre."""
 import copy
 import heapq
 import math
